@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
 .venv/
@@ -26,6 +26,11 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# Databases and local storage
+*.db
+*.sqlite
+*.sqlite3
 
 # Temporary files
 *.log

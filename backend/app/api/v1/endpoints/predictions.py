@@ -1,26 +1,26 @@
+import json
 from io import BytesIO
-
-from fastapi import UploadFile, File
-from PIL import Image, UnidentifiedImageError
-
-from app.services.image_service import image_service
 import os
 from pathlib import Path
-
-import pandas as pd
-from fastapi import Query
-
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+import pandas as pd
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from app.api.deps import get_optional_current_user
+from app.db.models import PredictionHistory, User
+from app.db.session import get_db
+from app.services.image_service import image_service
 from app.services.model_service import model_service
 
 router = APIRouter()
 
 
 class MetadataPredictionRequest(BaseModel):
+    isic_id: Optional[str] = None
     age_approx: Optional[float] = None
     sex: Optional[str] = None
     anatom_site_general: Optional[str] = None
@@ -67,7 +67,11 @@ class MetadataPredictionRequest(BaseModel):
 
 
 @router.post("/metadata")
-def predict_metadata(request: MetadataPredictionRequest):
+def predict_metadata(
+    request: MetadataPredictionRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
     if not model_service.is_loaded:
         raise HTTPException(
             status_code=503,
@@ -75,10 +79,49 @@ def predict_metadata(request: MetadataPredictionRequest):
         )
 
     try:
-        result = model_service.predict_metadata(
-            request.model_dump(exclude_unset=True)
-        )
+        raw_dict = request.model_dump(exclude_unset=True)
+        # Separate isic_id from feature dictionary
+        isic_id = raw_dict.pop("isic_id", None)
+
+        result = model_service.predict_metadata(raw_dict)
+
+        # Save to database if user is logged in
+        saved_to_history = False
+        prediction_id = None
+        if current_user:
+            # Build compact input summary with salient clinical features
+            summary_dict = {
+                k: v
+                for k, v in raw_dict.items()
+                if v is not None
+                and k
+                in [
+                    "age_approx",
+                    "sex",
+                    "anatom_site_general",
+                    "clin_size_long_diam_mm",
+                    "tbp_tile_type",
+                ]
+            }
+            record = PredictionHistory(
+                user_id=current_user.id,
+                prediction_type="metadata",
+                model_name="CatBoost",
+                isic_id=isic_id,
+                risk_score=result["risk_score"],
+                risk_score_percent=result["risk_score_percent"],
+                input_summary=json.dumps(summary_dict),
+            )
+            db.add(record)
+            db.commit()
+            db.refresh(record)
+            saved_to_history = True
+            prediction_id = record.id
+
+        result["saved_to_history"] = saved_to_history
+        result["prediction_id"] = prediction_id
         return result
+
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -87,34 +130,51 @@ def predict_metadata(request: MetadataPredictionRequest):
 
 
 # Path to the ISIC metadata CSV.
-DATA_PATH = (
-    Path(__file__).resolve().parents[4]
-    / "data"
-    / "train-metadata.csv"
-)
-
-print("Predictions file:", Path(__file__).resolve())
-print("CSV path:", DATA_PATH)
-print("CSV exists:", DATA_PATH.is_file())
+DATA_PATH = Path(__file__).resolve().parents[4] / "data" / "train-metadata.csv"
 
 # Features expected by the trained model, excluding generated _freq columns.
 MODEL_INPUT_COLUMNS = [
-    "age_approx", "sex", "anatom_site_general",
-    "clin_size_long_diam_mm", "tbp_tile_type",
-    "tbp_lv_A", "tbp_lv_Aext", "tbp_lv_B", "tbp_lv_Bext",
-    "tbp_lv_C", "tbp_lv_Cext", "tbp_lv_H", "tbp_lv_Hext",
-    "tbp_lv_L", "tbp_lv_Lext", "tbp_lv_areaMM2",
-    "tbp_lv_area_perim_ratio", "tbp_lv_color_std_mean",
-    "tbp_lv_deltaA", "tbp_lv_deltaB", "tbp_lv_deltaL",
-    "tbp_lv_deltaLB", "tbp_lv_deltaLBnorm",
-    "tbp_lv_eccentricity", "tbp_lv_location",
-    "tbp_lv_location_simple", "tbp_lv_minorAxisMM",
-    "tbp_lv_nevi_confidence", "tbp_lv_norm_border",
-    "tbp_lv_norm_color", "tbp_lv_perimeterMM",
-    "tbp_lv_radial_color_std_max", "tbp_lv_stdL",
-    "tbp_lv_stdLExt", "tbp_lv_symm_2axis",
-    "tbp_lv_symm_2axis_angle", "tbp_lv_x", "tbp_lv_y",
-    "tbp_lv_z", "attribution", "copyright_license",
+    "age_approx",
+    "sex",
+    "anatom_site_general",
+    "clin_size_long_diam_mm",
+    "tbp_tile_type",
+    "tbp_lv_A",
+    "tbp_lv_Aext",
+    "tbp_lv_B",
+    "tbp_lv_Bext",
+    "tbp_lv_C",
+    "tbp_lv_Cext",
+    "tbp_lv_H",
+    "tbp_lv_Hext",
+    "tbp_lv_L",
+    "tbp_lv_Lext",
+    "tbp_lv_areaMM2",
+    "tbp_lv_area_perim_ratio",
+    "tbp_lv_color_std_mean",
+    "tbp_lv_deltaA",
+    "tbp_lv_deltaB",
+    "tbp_lv_deltaL",
+    "tbp_lv_deltaLB",
+    "tbp_lv_deltaLBnorm",
+    "tbp_lv_eccentricity",
+    "tbp_lv_location",
+    "tbp_lv_location_simple",
+    "tbp_lv_minorAxisMM",
+    "tbp_lv_nevi_confidence",
+    "tbp_lv_norm_border",
+    "tbp_lv_norm_color",
+    "tbp_lv_perimeterMM",
+    "tbp_lv_radial_color_std_max",
+    "tbp_lv_stdL",
+    "tbp_lv_stdLExt",
+    "tbp_lv_symm_2axis",
+    "tbp_lv_symm_2axis_angle",
+    "tbp_lv_x",
+    "tbp_lv_y",
+    "tbp_lv_z",
+    "attribution",
+    "copyright_license",
 ]
 
 
@@ -128,7 +188,6 @@ def get_metadata_row(isic_id: str):
         )
 
     try:
-        # Read the identifier as text to preserve its exact format.
         df = pd.read_csv(
             DATA_PATH,
             usecols=lambda column: column == "isic_id"
@@ -158,9 +217,13 @@ def get_metadata_row(isic_id: str):
         if pd.isna(value):
             metadata[column] = None
         elif column in {
-            "sex", "anatom_site_general", "tbp_tile_type",
-            "tbp_lv_location", "tbp_lv_location_simple",
-            "attribution", "copyright_license",
+            "sex",
+            "anatom_site_general",
+            "tbp_tile_type",
+            "tbp_lv_location",
+            "tbp_lv_location_simple",
+            "attribution",
+            "copyright_license",
         }:
             metadata[column] = str(value)
         else:
@@ -172,9 +235,12 @@ def get_metadata_row(isic_id: str):
     }
 
 
-
 @router.post("/image")
-async def predict_image(file: UploadFile = File(...)):
+async def predict_image(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
     """Run experimental ResNet-18 inference on an uploaded skin image."""
 
     if not image_service.is_loaded:
@@ -202,6 +268,33 @@ async def predict_image(file: UploadFile = File(...)):
         image.load()
 
         result = image_service.predict_image(image)
+
+        # Save to database if user is logged in
+        saved_to_history = False
+        prediction_id = None
+        if current_user:
+            summary_dict = {
+                "filename": file.filename or "uploaded_image",
+                "content_type": file.content_type or "image/jpeg",
+                "dimensions": f"{image.width}x{image.height}",
+            }
+            record = PredictionHistory(
+                user_id=current_user.id,
+                prediction_type="image",
+                model_name="ResNet-18",
+                isic_id=None,
+                risk_score=result["risk_score"],
+                risk_score_percent=result["risk_score_percent"],
+                input_summary=json.dumps(summary_dict),
+            )
+            db.add(record)
+            db.commit()
+            db.refresh(record)
+            saved_to_history = True
+            prediction_id = record.id
+
+        result["saved_to_history"] = saved_to_history
+        result["prediction_id"] = prediction_id
         return result
 
     except HTTPException:

@@ -1,37 +1,37 @@
 """
-Database Service Placeholder
-
-NOTE:
-Database connectivity (PostgreSQL / SQLAlchemy) is NOT configured at this stage.
-Alembic migrations, database models (User, PredictionHistory), and session
-management will be introduced in a future development phase.
+Database Service
+Provides status information and connectivity checks for the database.
 """
 
 from typing import Any, Dict
+from sqlalchemy import text
+from app.db.session import engine, database_url
 
 
 class DatabaseService:
-    """
-    Placeholder service for database session and persistence.
-
-    Future Responsibilities:
-    1. Manage SQLAlchemy engine and connection pool (PostgreSQL).
-    2. Persist patient prediction records and audit history.
-    3. Support user authentication and authorization (JWT).
-    """
-
-    def __init__(self) -> None:
-        self.is_connected: bool = False
+    """Service reporting database engine and connectivity status."""
 
     def get_status(self) -> Dict[str, Any]:
-        """Returns the status of the database connection."""
+        """Checks live connectivity to the configured database."""
+        engine_type = "SQLite" if "sqlite" in database_url.lower() else "PostgreSQL"
+        is_connected = False
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+                is_connected = True
+        except Exception:
+            is_connected = False
+
         return {
-            "database_connected": self.is_connected,
-            "engine": "PostgreSQL (Planned)",
-            "orm": "SQLAlchemy (Planned)",
-            "status": "Database offline. Persistence layer scheduled for future phase.",
+            "database_connected": is_connected,
+            "engine": engine_type,
+            "url_scheme": database_url.split(":")[0],
+            "status": "Online" if is_connected else "Offline / Connection Error",
         }
 
+    @property
+    def is_connected(self) -> bool:
+        return self.get_status()["database_connected"]
 
-# Global database service instance
+
 db_service = DatabaseService()

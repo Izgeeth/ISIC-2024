@@ -4,14 +4,17 @@ import Navigation from './components/Navigation';
 import Disclaimer from './components/Disclaimer';
 import Dashboard from './pages/Dashboard';
 import History from './pages/History';
+import AuthModal from './components/AuthModal';
+import { AuthProvider } from './context/AuthContext';
 
-export default function App() {
+function MainApp() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [authModalOpen, setAuthModalOpen] = useState(false);
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col text-slate-900">
       {/* Top Application Header */}
-      <Header />
+      <Header onOpenAuth={() => setAuthModalOpen(true)} />
 
       {/* Navigation Bar */}
       <Navigation activeTab={activeTab} onSelectTab={setActiveTab} />
@@ -23,11 +26,20 @@ export default function App() {
 
         {/* Dynamic Page Views */}
         {activeTab === 'dashboard' ? (
-          <Dashboard />
+          <Dashboard onOpenAuth={() => setAuthModalOpen(true)} />
         ) : (
-          <History onNavigateToDashboard={() => setActiveTab('dashboard')} />
+          <History
+            onNavigateToDashboard={() => setActiveTab('dashboard')}
+            onOpenAuth={() => setAuthModalOpen(true)}
+          />
         )}
       </main>
+
+      {/* Authentication Modal */}
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+      />
 
       {/* Minimal Footer */}
       <footer className="border-t border-slate-200 bg-white py-4 px-6 text-center text-xs text-slate-500">
@@ -36,5 +48,13 @@ export default function App() {
         </p>
       </footer>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <MainApp />
+    </AuthProvider>
   );
 }
